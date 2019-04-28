@@ -58,7 +58,8 @@ template <typename Context>
 struct async_connect_op {
     Context context;
 
-    void perform(const std::string& conninfo, const time_traits::duration& timeout) {
+    template <typename TimeConstrain>
+    void perform(const std::string& conninfo, const TimeConstrain& time_constrain) {
         if (error_code ec = start_connection(get_connection(context), conninfo)) {
             return done(ec);
         }
@@ -71,7 +72,7 @@ struct async_connect_op {
             return done(ec);
         }
 
-        detail::set_io_timeout(get_connection(context), get_handler(context), timeout);
+        detail::set_io_timeout(get_connection(context), get_handler(context), time_constrain);
 
         return write_poll(get_connection(context), *this);
     }
@@ -172,20 +173,43 @@ constexpr decltype(auto) make_request_oid_map_handler(Handler&& handler, Require
     return std::forward<Handler>(handler);
 }
 
-template <typename ConnectionT, typename Handler>
-inline Require<Connection<ConnectionT>> async_connect(std::string conninfo, const time_traits::duration& timeout,
-        ConnectionT&& connection, Handler&& handler) {
+template <typename C, typename Handler>
+inline void async_connect(std::string conninfo, const time_traits::duration& timeout,
+        C&& connection, Handler&& handler) {
+    static_assert(Connection<C>, "C should model Connection concept");
     auto strand = ozo::detail::make_strand_executor(get_executor(connection));
     make_async_connect_op(
         make_connect_operation_context(
-            std::forward<ConnectionT>(connection),
-            make_request_oid_map_handler<ConnectionT>(
+            std::forward<C>(connection),
+            make_request_oid_map_handler<C>(
                 asio::bind_executor(strand, detail::cancel_timer_handler(
                     detail::post_handler(std::forward<Handler>(handler))
                 ))
             )
         )
     ).perform(conninfo, timeout);
+}
+
+template <typename C, typename Handler>
+inline void async_connect(std::string conninfo, const deadline& at, C&& connection, Handler&& handler) {
+    async_connect(std::move(conninfo), at.time_left(),
+        std::forward<C>(connection), std::forward<Handler>(handler));
+}
+
+template <typename C, typename Handler>
+inline void async_connect(std::string conninfo, C&& connection, Handler&& handler) {
+    static_assert(Connection<C>, "C should model Connection concept");
+    auto strand = ozo::detail::make_strand_executor(get_executor(connection));
+    make_async_connect_op(
+        make_connect_operation_context(
+            std::forward<C>(connection),
+            make_request_oid_map_handler<C>(
+                asio::bind_executor(strand,
+                    detail::post_handler(std::forward<Handler>(handler))
+                )
+            )
+        )
+    ).perform(conninfo, no_time_constrain);
 }
 
 } // namespace impl

@@ -7,7 +7,7 @@
 #include <ozo/io/binary_query.h>
 #include <ozo/connection.h>
 #include <ozo/query_builder.h>
-#include <ozo/time_traits.h>
+#include <ozo/deadline.h>
 
 #include <boost/asio/bind_executor.hpp>
 #include <boost/asio/coroutine.hpp>
@@ -308,15 +308,15 @@ inline void async_get_result(Context&& ctx, ResultProcessor&& p) {
     op.perform();
 }
 
-template <typename OutHandler, typename Query, typename Handler>
+template <typename OutHandler, typename Query, typename TimeConstrain, typename Handler>
 struct async_request_op {
     OutHandler out_;
     Query query_;
-    time_traits::duration timeout_;
+    TimeConstrain time_constrain_;
     Handler handler_;
 
-    async_request_op(Query query, time_traits::duration timeout, OutHandler out, Handler handler)
-    : out_(std::move(out)), query_(std::move(query)), timeout_(timeout), handler_(std::move(handler)) {}
+    async_request_op(Query query, TimeConstrain time_constrain, OutHandler out, Handler handler)
+    : out_(std::move(out)), query_(std::move(query)), time_constrain_(time_constrain), handler_(std::move(handler)) {}
 
     template <typename Connection>
     void operator() (error_code ec, Connection conn) {
@@ -332,7 +332,7 @@ struct async_request_op {
                 detail::post_handler(std::move(handler_))
             ))
         );
-        detail::set_io_timeout(get_connection(ctx), get_handler(ctx), timeout_);
+        detail::set_io_timeout(get_connection(ctx), get_handler(ctx), time_constrain_);
 
         async_send_query_params(ctx, std::move(query_));
         async_get_result(std::move(ctx), std::move(out_));
@@ -372,6 +372,20 @@ inline void async_request(P&& provider, Q&& query, const time_traits::duration& 
         async_request_op{
             std::forward<Q>(query),
             timeout,
+            async_request_out_handler{std::forward<Out>(out)},
+            std::forward<Handler>(handler)
+        }
+    );
+}
+
+template <typename P, typename Q, typename Out, typename Handler>
+inline void async_request(P&& provider, Q&& query, const deadline& at, Out&& out, Handler&& handler) {
+    static_assert(ConnectionProvider<P>, "is not a ConnectionProvider");
+    static_assert(Query<Q> || QueryBuilder<Q>, "is neither Query nor QueryBuilder");
+    async_get_connection(std::forward<P>(provider), at,
+        async_request_op{
+            std::forward<Q>(query),
+            at,
             async_request_out_handler{std::forward<Out>(out)},
             std::forward<Handler>(handler)
         }

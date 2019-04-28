@@ -84,6 +84,18 @@ struct request_op {
     }
 
     template <typename P, typename Q, typename Out, typename CompletionToken>
+    decltype(auto) operator() (P&& provider, Q&& query, deadline time_constrain, Out out, CompletionToken&& token) const {
+        static_assert(ConnectionProvider<P>, "provider should be a ConnectionProvider");
+        using signature_t = void (error_code, connection_type<P>);
+        async_completion<CompletionToken, signature_t> init(token);
+
+        impl::async_request(std::forward<P>(provider), std::forward<Q>(query), time_constrain, std::move(out),
+                init.completion_handler);
+
+        return init.result.get();
+    }
+
+    template <typename P, typename Q, typename Out, typename CompletionToken>
     decltype(auto) operator()(P&& provider, Q&& query, Out out, CompletionToken&& token) const {
         static_assert(ConnectionProvider<P>, "provider should be a ConnectionProvider");
         return (*this)(
